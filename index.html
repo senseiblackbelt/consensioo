@@ -99,7 +99,8 @@ function scoreNeuro(secteur, neuroList){
 </script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#f4f6fc;--bg2:#fff;--bg3:#edf0f8;--bg4:#e3e7f4;--border:#dde2f0;--text:#1a1d2e;--muted:#7b82a0;--muted2:#a8aec8;--blue:#0055ff;--bluel:rgba(0,85,255,.08);--green:#007a45;--greenl:rgba(0,122,69,.08);--orange:#d47000;--orangel:rgba(212,112,0,.08);--red:#c8281e;--redl:rgba(200,40,30,.08);--purple:#6b3fa0;--font:'IBM Plex Sans',sans-serif;--mono:'IBM Plex Mono',monospace;}
+:root{--bg:#f4f6fc;--bg2:#fff;--bg3:#edf0f8;--bg4:#e3e7f4;--border:#dde2f0;--text:#1a1d2e;--muted:#7b82a0;
+  --accent2:#f0a500;--muted2:#a8aec8;--blue:#0055ff;--bluel:rgba(0,85,255,.08);--green:#007a45;--greenl:rgba(0,122,69,.08);--orange:#d47000;--orangel:rgba(212,112,0,.08);--red:#c8281e;--redl:rgba(200,40,30,.08);--purple:#6b3fa0;--font:'IBM Plex Sans',sans-serif;--mono:'IBM Plex Mono',monospace;}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.55;min-height:100vh}
 header{background:var(--text);color:#fff;padding:16px 28px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
@@ -256,6 +257,7 @@ header{background:var(--text);color:#fff;padding:16px 28px;display:flex;align-it
         <select id="ps"><option value="">— Choisir —</option><option>Lycéen·ne</option><option>Étudiant·e</option><option>En emploi (CDI)</option><option>En emploi (CDD)</option><option>En recherche d'emploi</option><option>Indépendant·e</option><option>En reconversion</option></select>
       </div>
       <div class="fi" id="psef" style="display:none"><label>Secteur actuel</label><input type="text" id="pse" placeholder="Ex : Finance, IT, Santé…"></div>
+      <div class="fi" id="pmef" style="display:none"><label>Métier actuel <span style="font-size:10px;color:var(--muted);font-weight:400">(intitulé du poste)</span></label><input type="text" id="pme" placeholder="Ex : Comptable, Infirmière, Chef de projet…"></div>
       <div class="fi"><label>Localisation</label><input type="text" id="pl" placeholder="Ex : Paris, Lyon…"></div>
     </div>
   </div>
@@ -444,6 +446,7 @@ function setMode(m){
   document.getElementById('mlabel').textContent='Mode : '+(m==='orientation'?'🎓 Orientation':'🔄 Reconversion');
   document.getElementById('pnl').textContent=m==='orientation'?"Niveau d'étude actuel":"Dernier niveau d'étude";
   document.getElementById('psef').style.display=m==='reconversion'?'block':'none';
+  document.getElementById('pmef').style.display=m==='reconversion'?'block':'none';
   buildAll();
 }
 
@@ -553,13 +556,22 @@ function compute(){
   const db=DB[mode];
   const budget=con.budget||99999;
   const durMax=con.durMax||999;
+  // Métier actuel (reconversion) — bonus transferabilité RIASEC
+  const metierActuel=(document.getElementById('pme')&&document.getElementById('pme').value.trim())||'';
 
   const metiers=db.metiers.map(m=>{
     const sR=rmatch(riasec,m.riasec),sV=vs,sC=cs,sI=m.taux_emploi,sIA=m.score_ia;
     const sNeuro=(scoreNeuro(m.secteur,neuro)+1)/2; // normalise -1..+1 → 0..1
     const wN=neuro.length>0?0.10:0;
     const wBase=1-wN;
-    return{...m,final:(sR*0.30+sV*0.15+sC*0.15+sI*0.20+sIA*0.20)*wBase + sNeuro*wN};
+    // Bonus transferabilité : si le code ROME du métier actuel est identique au métier cible → +5% plafonné
+    const memeCode=metierActuel&&m.code&&metierActuel.toUpperCase().includes(m.code)?0.05:0;
+    // Bonus secteur : si le secteur actuel contient un mot du secteur cible → +3%
+    const secteurActuel=(document.getElementById('pse')&&document.getElementById('pse').value)||'';
+    const secteurBonus=secteurActuel&&m.secteur&&m.secteur.split('/').some(s=>secteurActuel.toLowerCase().includes(s.trim().toLowerCase()))?0.03:0;
+    const rawFinal=(sR*0.30+sV*0.15+sC*0.15+sI*0.20+sIA*0.20)*wBase + sNeuro*wN;
+    const finalScore=mode==='reconversion'?Math.min(1,rawFinal+memeCode+secteurBonus):rawFinal;
+    return{...m,final:finalScore,memeCode,secteurBonus};
   }).sort((a,b)=>b.final-a.final);
 
   const formations=db.formations.map(f=>{
@@ -603,8 +615,10 @@ function fmtE(n){return Math.round(n).toLocaleString('fr-FR')+' €';}
 
 // ══ CONSTRUCTION RÉSULTATS ════════════════════════════════════════
 function buildResults(riasec,metiers,formations,entrepreneuriat,con,vs,cs,budget){
-  const prenom=gv('pp')||'',nom=gv('pnom')||'',age=gv('pa');
+  const prenom=gv('pp')||'',nom=gv('pnom')||'',age=gv('pa'),situation=gv('ps')||'';
   const identite=[prenom,nom].filter(Boolean).join(' ')||(prenom||nom||'Profil');
+  const mActuel=!isO&&document.getElementById('pme')?document.getElementById('pme').value.trim():'';
+  const sActuel=!isO&&document.getElementById('pse')?document.getElementById('pse').value.trim():'';
   const top3=Object.entries(riasec).sort((a,b)=>b[1]-a[1]).slice(0,3).map(e=>e[0]).join(' + ');
   const isO=mode==='orientation';
   const rlabels={R:'Réaliste',I:'Investigateur',A:'Artistique',S:'Social',E:'Entreprenant',C:'Conventionnel'};
@@ -612,8 +626,15 @@ function buildResults(riasec,metiers,formations,entrepreneuriat,con,vs,cs,budget
   let h='';
 
   // Bannière
+  const metierActuelDisplay=!isO&&document.getElementById('pme')&&document.getElementById('pme').value.trim()?document.getElementById('pme').value.trim():'';
+  const secteurActuelDisplay=!isO&&document.getElementById('pse')&&document.getElementById('pse').value.trim()?document.getElementById('pse').value.trim():'';
   h+='<div class="vban ok"><div class="vbi">'+(isO?'🎓':'🔄')+'</div><div>';
-  h+='<div class="vbt">'+identite+(age?' · '+age+' ans':'')+' · Code RIASEC dominant : <strong>'+top3+'</strong></div>';
+  h+='<div class="vbt">'+identite+(age?' · '+age+' ans':'');
+  if(!isO&&situation) h+=' · '+situation;
+  if(metierActuelDisplay) h+=' · <span style="color:var(--accent2)">Métier actuel : <strong>'+metierActuelDisplay+'</strong></span>';
+  else if(secteurActuelDisplay) h+=' · Secteur actuel : <strong>'+secteurActuelDisplay+'</strong>';
+  h+=' · Code RIASEC dominant : <strong>'+top3+'</strong>';
+  h+='</div>';
   h+='<div class="vbs">'+(isO?'Outil Orientation':'Outil Reconversion')+' · '+metiers.length+' métiers · '+formations.length+' formations analysés</div>';
   h+='</div></div>';
 
@@ -724,6 +745,17 @@ function buildResults(riasec,metiers,formations,entrepreneuriat,con,vs,cs,budget
   else if(isO)
     h+='<div class="ac ok">✅ <div><strong>Mobilité</strong> — Distance acceptable. Toutes les localisations sont accessibles.</div></div>';
   h+='<div class="ac ok">✅ <div><strong>Genre</strong> — Aucune pondération selon le genre. Tous les métiers sont présentés sans filtre.</div></div>';
+  // Alerte biais ancrage métier actuel (reconversion uniquement)
+  if(!isO){
+    const mA=document.getElementById('pme')&&document.getElementById('pme').value.trim();
+    const sA=document.getElementById('pse')&&document.getElementById('pse').value.trim();
+    if(mA||sA){
+      const top1=metiers[0];
+      const memeS=top1&&sA&&top1.secteur.toLowerCase().includes(sA.toLowerCase());
+      if(memeS) h+='<div class="ac warn">⚠️ <div><strong>Biais d\'ancrage — secteur actuel</strong> — Le métier #1 recommandé est dans votre secteur actuel (<strong>'+sA+'</strong>). Vérifiez que cette convergence reflète une vraie appétence et non un confort de familiarité.</div></div>';
+      else h+='<div class="ac ok">✅ <div><strong>Ancrage métier actuel</strong> — Le top recommandé sort de votre secteur actuel. Bonne ouverture exploratoire.</div></div>';
+    }
+  }
   h+='<div class="ac ok">✅ <div><strong>Résistance IA</strong> — Score Oxford Martin / McKinsey / OCDE intégré (pondération 20%). Les métiers exposés (% tâches auto.) sont signalés.</div></div>';
   if(riasec['C']>=70)
     h+='<div class="ac warn">⚠️ <div><strong>Profil Conventionnel dominant (C≥70)</strong> — Certains métiers C (comptabilité, gestion administrative) sont fortement exposés à l\'IA avant 2030. Vérifiez le score IA de chaque recommandation.</div></div>';
